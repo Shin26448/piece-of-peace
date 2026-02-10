@@ -4,107 +4,88 @@ import { PuzzlePieceData } from "../types";
 interface PuzzlePieceProps {
   data: PuzzlePieceData;
   imageSrc?: string;
+  pieceSize: number; // px
+  rows: number;
+  cols: number;
   onDragStart?: (id: number, e: React.PointerEvent) => void;
 }
-
-const PIECE_SIZE = 100;
 
 export const PuzzlePiece: React.FC<PuzzlePieceProps> = ({
   data,
   imageSrc,
+  pieceSize,
+  rows,
+  cols,
   onDragStart,
 }) => {
   const { path, position, row, col, isSolved, id } = data;
+
   const clipId = `clip-${id}`;
+  const filterId = `shadow-${id}`;
+
+  // ✅ path는 100x100 기준으로 만들어져있음 → pieceSize로 줄이려면 scale 필요
+  const s = pieceSize / 100;
+
+  // ✅ 이미지도 "100기준 좌표계"로 맞추면 정확히 들어맞음
+  const imgW = cols * 100;
+  const imgH = rows * 100;
 
   const style = useMemo(
     () => ({
       cursor: "grab",
-      transition: "transform 0.1s ease-out", // 드래그 시 반응성 개선
-      zIndex: isSolved ? 0 : 50, // 안 맞춰진 조각이 항상 위에 오도록
+      transition: "transform 0.05s linear",
     }),
-    [isSolved]
+    []
   );
 
   return (
+    // ✅ translate는 px 단위, scale은 내부 조각만 줄이기
     <g
-      transform={`translate(${position.x}, ${position.y})`}
+      transform={`translate(${position.x}, ${position.y}) scale(${s})`}
       onPointerDown={(e) => onDragStart?.(id, e)}
       style={style}
+      filter={`url(#${filterId})`}
     >
-      {/* [핵심 수정] 조각 확대 (Scale Up) 
-        조각을 1.02배(2%) 키워서 옆 조각과 살짝 겹치게 만듭니다.
-        이렇게 하면 브라우저 렌더링 오차로 인한 흰 틈(Gap)이 완벽하게 사라집니다.
-        transformOrigin은 조각의 중심(50px 50px)입니다.
-      */}
-      <g style={{ transform: "scale(1.02)", transformOrigin: "50px 50px" }}>
-        <defs>
-          <clipPath id={clipId}>
-            <path d={path} />
-          </clipPath>
-        </defs>
+      <defs>
+        <clipPath id={clipId}>
+          <path d={path} />
+        </clipPath>
 
-        {/* 1. 이미지 */}
-        {imageSrc && (
-          <image
-            href={imageSrc}
-            x={-col * PIECE_SIZE}
-            y={-row * PIECE_SIZE}
-            width={1000}
-            height={1000}
-            clipPath={`url(#${clipId})`}
-            preserveAspectRatio="none"
-            pointerEvents="none"
-          />
-        )}
+        <filter id={filterId} x="-60%" y="-60%" width="220%" height="220%">
+          <feDropShadow dx="2" dy="2" stdDeviation="2" floodOpacity="0.28" result="shadow" />
+          <feMerge>
+            <feMergeNode in="shadow" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+      </defs>
 
-        {/* 2. 테두리 및 그림자 처리 */}
-        {!isSolved ? (
-          <>
-            {/* [안 맞춰짐] 입체감을 위한 그림자와 밝은 테두리 */}
-            <path
-              d={path}
-              fill="none"
-              stroke="black"
-              strokeWidth="3"
-              strokeOpacity="0.2"
-              transform="translate(2, 2)"
-            />
-            <path
-              d={path}
-              fill="none"
-              stroke="white"
-              strokeWidth="1.5"
-              strokeOpacity="0.6"
-            />
-            <path
-              d={path}
-              fill="none"
-              stroke="black"
-              strokeWidth="0.5"
-              strokeOpacity="0.3"
-            />
-          </>
-        ) : (
-          /* [맞춰짐] 틈새를 자연스럽게 메우기 위한 아주 얇은 '연결선' (Grout)
-             투명하게(none) 하면 겹친 부분이 어색할 수 있어 0.1 투명도로 남겨둡니다. */
-          <path
-            d={path}
-            fill="none"
-            stroke="black"
-            strokeWidth="0.5"
-            strokeOpacity="0.1"
-          />
-        )}
+      {/* hit area */}
+      <path d={path} fill="transparent" stroke="none" />
 
-        {/* 클릭/드래그 영역 (투명) */}
-        <path
-          d={path}
-          fill="transparent"
-          stroke="none"
-          pointerEvents="visible"
+      {/* 이미지: 전체 이미지를 깔고, clipPath로 조각 부분만 보이게 */}
+      {imageSrc && (
+        <image
+          href={imageSrc}
+          x={-col * 100}
+          y={-row * 100}
+          width={imgW}
+          height={imgH}
+          clipPath={`url(#${clipId})`}
+          preserveAspectRatio="none"
+          pointerEvents="none"
         />
-      </g>
+      )}
+
+      {/* 테두리 */}
+      <path
+        d={path}
+        fill="none"
+        stroke="#555"
+        strokeWidth="1"
+        strokeOpacity={isSolved ? "0.25" : "0.55"}
+        pointerEvents="none"
+      />
     </g>
   );
 };
