@@ -18,7 +18,7 @@ type Edge = { type: SideType; seed: number };
 export const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
   rows,
   cols,
-  pieceSize = 60, // ✅ 더 작게
+  pieceSize = 60,
   snapThreshold = 28,
   imageSrc = "https://picsum.photos/800/600",
   title = "LEVEL 1",
@@ -32,10 +32,10 @@ export const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
   const svgRef = useRef<SVGSVGElement>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
 
-  const boardWidth = useMemo(() => cols * pieceSize, [cols, pieceSize]); // px
-  const boardHeight = useMemo(() => rows * pieceSize, [rows, pieceSize]); // px
+  const boardWidth = useMemo(() => cols * pieceSize, [cols, pieceSize]);
+  const boardHeight = useMemo(() => rows * pieceSize, [rows, pieceSize]);
 
-  const MARGIN = 220; // 퍼즐 바깥 공간
+  const MARGIN = 220;
   const outerW = boardWidth + MARGIN * 2;
   const outerH = boardHeight + MARGIN * 2;
 
@@ -70,10 +70,9 @@ export const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
     return { x: (e.clientX - CTM.e) / CTM.a, y: (e.clientY - CTM.f) / CTM.d };
   };
 
-  // ✅ 겹치지 않는 슬롯 생성 (테두리 여러 줄)
   const makeScatterSlots = () => {
     const slots: { x: number; y: number }[] = [];
-    const GAP = 18; // ✅ 겹침 방지용 간격(조금 넓게)
+    const GAP = 18;
     const PAD = 24;
 
     const xMinAll = -MARGIN + PAD;
@@ -112,7 +111,7 @@ export const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
   const buildPieces = () => {
     audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
 
-    // ✅ edge를 {type, seed}로 (seed 공유)
+    // edge를 {type, seed}로 (seed는 "경계선" 단위로 공유)
     const vEdges: Edge[][] = Array(rows)
       .fill(0)
       .map(() =>
@@ -131,6 +130,7 @@ export const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
 
     let seedCounter = 1;
 
+    // 내부 세로 경계선
     for (let r = 0; r < rows; r++) {
       for (let c = 1; c < cols; c++) {
         vEdges[r][c] = {
@@ -140,6 +140,7 @@ export const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
       }
     }
 
+    // 내부 가로 경계선
     for (let r = 1; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         hEdges[r][c] = {
@@ -152,7 +153,6 @@ export const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
     const slots = makeScatterSlots();
     const need = rows * cols;
 
-    // 슬롯 부족하면 fallback(거의 없지만 안전)
     while (slots.length < need) {
       const x = -MARGIN + 30 + Math.random() * (boardWidth + MARGIN * 2 - pieceSize - 60);
       const y = -MARGIN + 30 + Math.random() * (boardHeight + MARGIN * 2 - pieceSize - 60);
@@ -179,16 +179,21 @@ export const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
         const seedLeft = c === 0 ? 0 : leftEdge.seed;
         const seedRight = c === cols - 1 ? 0 : rightEdge.seed;
 
-        const path = PieceGenerator.generatePath(
-          myTopType,
-          myRightType,
-          myBottomType,
-          myLeftType,
-          seedTop,
-          seedRight,
-          seedBottom,
-          seedLeft
-        );
+        // ✅ 핵심: 같은 edge를 서로 반대 방향으로 따라가면 "reverse"로 뒤집어서 써야 한다.
+        // PieceGenerator는 내부에서 'seed로 edge를 1번만 생성'하고,
+        // reverse=true면 베지어를 정확히 역방향으로 뒤집는다.
+        //
+        // 이 프로젝트의 path는 조각을 시계방향으로 그리는데,
+        // - top: 좌→우 (정방향)    => reverse: false
+        // - right: 상→하 (정방향)  => reverse: false
+        // - bottom: 우→좌 (역방향) => reverse: true
+        // - left: 하→상 (역방향)   => reverse: true
+        const path = PieceGenerator.generatePath({
+          top: { type: myTopType, seed: seedTop, reverse: false },
+          right: { type: myRightType, seed: seedRight, reverse: false },
+          bottom: { type: myBottomType, seed: seedBottom, reverse: true },
+          left: { type: myLeftType, seed: seedLeft, reverse: true },
+        });
 
         const pos = slots[id];
 
@@ -202,7 +207,7 @@ export const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
           bottom: myBottomType,
           left: myLeftType,
           path,
-          position: { x: pos.x, y: pos.y }, // ✅ px 좌표
+          position: { x: pos.x, y: pos.y },
           correctPosition: { x: c * pieceSize, y: r * pieceSize },
           isSolved: false,
         });
@@ -258,137 +263,158 @@ export const PuzzleBoard: React.FC<PuzzleBoardProps> = ({
       })
     );
 
-    setDragStartPos({ x: svgPoint.x, y: svgPoint.y });
+    setDragStartPos(svgPoint);
   };
 
-  const checkCleared = (list: PuzzlePieceData[]) => {
-    const groupIds = new Set(list.map((p) => p.groupId));
-    if (groupIds.size === 1) setIsCleared(true);
-  };
+  const mergeGroupsIfSnapped = (a: PuzzlePieceData, b: PuzzlePieceData) => {
+    const ax = a.position.x;
+    const ay = a.position.y;
+    const bx = b.position.x;
+    const by = b.position.y;
 
-  const checkConnection = (activeGroupId: number) => {
-    let merged = false;
-    const newPieces = [...pieces];
+    const dx = (a.correctPosition.x - b.correctPosition.x) + (bx - ax);
+    const dy = (a.correctPosition.y - b.correctPosition.y) + (by - ay);
 
-    const activeGroup = newPieces.filter((p) => p.groupId === activeGroupId);
-    const otherPieces = newPieces.filter((p) => p.groupId !== activeGroupId);
+    if (Math.abs(dx) <= snapThreshold && Math.abs(dy) <= snapThreshold) {
+      // b 그룹을 a 그룹으로 합치기
+      setPieces((prev) => {
+        const gidA = a.groupId;
+        const gidB = b.groupId;
 
-    for (const activePiece of activeGroup) {
-      for (const targetPiece of otherPieces) {
-        const isNeighbor =
-          Math.abs(activePiece.col - targetPiece.col) + Math.abs(activePiece.row - targetPiece.row) === 1;
-        if (!isNeighbor) continue;
+        // gidB에 속한 모든 조각을 gidA로
+        const updated = prev.map((p) => {
+          if (p.groupId === gidB) {
+            return {
+              ...p,
+              groupId: gidA,
+              position: { x: p.position.x - dx, y: p.position.y - dy },
+            };
+          }
+          return p;
+        });
 
-        const idealDistX = (activePiece.col - targetPiece.col) * pieceSize;
-        const idealDistY = (activePiece.row - targetPiece.row) * pieceSize;
+        return updated;
+      });
 
-        const currentDistX = activePiece.position.x - targetPiece.position.x;
-        const currentDistY = activePiece.position.y - targetPiece.position.y;
-
-        if (
-          Math.abs(currentDistX - idealDistX) < snapThreshold &&
-          Math.abs(currentDistY - idealDistY) < snapThreshold
-        ) {
-          const correctionX = idealDistX - currentDistX;
-          const correctionY = idealDistY - currentDistY;
-
-          activeGroup.forEach((p) => {
-            p.position.x += correctionX;
-            p.position.y += correctionY;
-            p.groupId = targetPiece.groupId;
-            p.isSolved = true;
-          });
-
-          targetPiece.isSolved = true;
-          playSnapSound();
-          merged = true;
-          break;
-        }
-      }
-      if (merged) break;
+      playSnapSound();
+      return true;
     }
-
-    if (merged) {
-      setPieces(newPieces);
-      checkCleared(newPieces);
-    }
+    return false;
   };
 
-  const handleDragEnd = (e: React.PointerEvent) => {
+  const handleDragEnd = () => {
+    if (isCleared) return;
     if (draggingGroupId === null) return;
-    checkConnection(draggingGroupId);
+
+    const groupPieces = pieces.filter((p) => p.groupId === draggingGroupId);
+
+    // 그룹 내 임의 대표 하나로 검사(충분)
+    const rep = groupPieces[0];
+    if (!rep) {
+      setDraggingGroupId(null);
+      setDragStartPos(null);
+      return;
+    }
+
+    // 대표 조각과 인접한 조각들을 찾아 snap 시도
+    const others = pieces.filter((p) => p.groupId !== draggingGroupId);
+
+    // 모든 조각과 비교하면 느려질 수 있지만 여기선 OK
+    for (let i = 0; i < others.length; i++) {
+      const b = others[i];
+      // 인접 후보만
+      const dr = Math.abs(rep.row - b.row);
+      const dc = Math.abs(rep.col - b.col);
+      if (dr + dc !== 1) continue;
+
+      const snapped = mergeGroupsIfSnapped(rep, b);
+      if (snapped) break;
+    }
+
+    // 전체 클리어 체크
+    setTimeout(() => {
+      setPieces((prev) => {
+        const allClose = prev.every((p) => {
+          const dx = p.position.x - p.correctPosition.x;
+          const dy = p.position.y - p.correctPosition.y;
+          return Math.abs(dx) <= snapThreshold && Math.abs(dy) <= snapThreshold;
+        });
+
+        if (allClose) {
+          const solved = prev.map((p) => ({ ...p, isSolved: true, position: p.correctPosition }));
+          setIsCleared(true);
+          return solved;
+        }
+        return prev;
+      });
+    }, 0);
+
     setDraggingGroupId(null);
     setDragStartPos(null);
-    (e.target as Element).releasePointerCapture(e.pointerId);
   };
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-stone-100 p-4 touch-none">
-      <div className="w-full max-w-3xl flex items-center justify-between mb-3">
-        <button
-          onClick={onBack}
-          className="px-3 py-2 rounded-md bg-white shadow text-stone-700 disabled:opacity-50"
-          type="button"
-          disabled={!onBack}
-        >
-          ← 홈
-        </button>
-
-        <div className="text-stone-600 tracking-widest">{title}</div>
-
-        <button onClick={buildPieces} className="px-3 py-2 rounded-md bg-white shadow text-stone-700" type="button">
-          리셋
-        </button>
-      </div>
-
-      <div className="relative bg-white shadow-xl rounded-lg overflow-hidden" style={{ width: outerW, height: outerH }}>
-        <svg
-          ref={svgRef}
-          width="100%"
-          height="100%"
-          viewBox={`${-MARGIN} ${-MARGIN} ${boardWidth + MARGIN * 2} ${boardHeight + MARGIN * 2}`}
-          className="bg-stone-50 cursor-default"
-          onPointerMove={handleDragMove}
-          onPointerUp={handleDragEnd}
-          onPointerLeave={handleDragEnd}
-        >
-          {pieces.map((p) => (
-            <PuzzlePiece
-              key={p.id}
-              data={p}
-              imageSrc={imageSrc}
-              pieceSize={pieceSize}
-              rows={rows}
-              cols={cols}
-              onDragStart={handleDragStart}
-            />
-          ))}
-        </svg>
-
-        {isCleared && (
-          <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-            <div className="bg-white rounded-2xl shadow-2xl p-6 w-[320px] text-center">
-              <div className="text-2xl tracking-widest text-stone-700 font-light">CLEAR!</div>
-              <div className="mt-2 text-stone-500">축하해 🎉 다 맞췄어!</div>
-              <div className="mt-5 flex gap-2 justify-center">
-                <button
-                  className="px-4 py-2 rounded-xl bg-stone-800 text-white"
-                  onClick={() => setIsCleared(false)}
-                  type="button"
-                >
-                  계속 보기
-                </button>
-                <button className="px-4 py-2 rounded-xl bg-stone-100 text-stone-700" onClick={buildPieces} type="button">
-                  다시하기
-                </button>
-              </div>
+    <div className="min-h-screen bg-stone-100 p-6">
+      <div className="max-w-5xl mx-auto">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-2xl tracking-widest text-stone-700 font-light">{title}</div>
+            <div className="text-stone-500 mt-1">
+              {rows} x {cols}
             </div>
           </div>
-        )}
-      </div>
 
-      <div className="mt-3 text-sm text-stone-500">
-        {rows} x {cols} · pieceSize {pieceSize}px · snap {snapThreshold}px
+          <div className="flex gap-2">
+            <button
+              onClick={buildPieces}
+              className="px-4 py-2 rounded-xl bg-white border border-stone-200 shadow-sm hover:bg-stone-50 text-stone-700"
+              type="button"
+            >
+              재시작
+            </button>
+            <button
+              onClick={onBack}
+              className="px-4 py-2 rounded-xl bg-stone-700 text-white hover:bg-stone-800"
+              type="button"
+            >
+              뒤로
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-6 bg-white rounded-2xl shadow-xl p-4 overflow-hidden">
+          <svg
+            ref={svgRef}
+            width="100%"
+            height="640"
+            viewBox={`${-MARGIN} ${-MARGIN} ${outerW} ${outerH}`}
+            onPointerMove={handleDragMove}
+            onPointerUp={handleDragEnd}
+            onPointerCancel={handleDragEnd}
+            style={{ touchAction: "none" }}
+          >
+            {/* 보드 가이드 */}
+            <rect x={0} y={0} width={boardWidth} height={boardHeight} fill="#fafafa" stroke="#ddd" strokeWidth="2" />
+
+            {pieces.map((p) => (
+              <PuzzlePiece
+                key={p.id}
+                data={p}
+                pieceSize={pieceSize}
+                rows={rows}
+                cols={cols}
+                imageSrc={imageSrc}
+                onDragStart={handleDragStart}
+              />
+            ))}
+          </svg>
+        </div>
+
+        {isCleared && (
+          <div className="mt-4 text-center text-stone-700">
+            🎉 완료! (모든 조각이 스냅됨)
+          </div>
+        )}
       </div>
     </div>
   );
